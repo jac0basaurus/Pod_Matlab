@@ -1,0 +1,62 @@
+function convertPodData(fileList)
+
+%Convert colocated pod files
+if ~isempty(fileList.colocation.pods.files)
+    convertData(fileList.colocation.pods);
+end
+
+%Convert field pod files
+if ~isempty(fileList.field.pods.files)
+    convertData(fileList.field.pods);
+end
+
+%Convert colocated reference files
+if ~isempty(fileList.colocation.reference.files)
+    convertData(fileList.colocation.reference);
+end
+
+end
+
+function convertData(filesStruct)
+for i = 1:length(filesStruct.files.bytes)
+    
+    if(length(filesStruct.files.bytes)==1)
+        fileName = filesStruct.files.name;
+    else
+        fileName = filesStruct.files.name(i);
+    end
+    
+    %Get the file directory and then assemble with the name to get the path
+    fileDir = filesStruct.dir;
+    filePath = fullfile(fileDir,fileName);
+    
+    %See if an equivalent mat file exists
+    matFilePath = strrep(filePath,'.txt','.mat');
+    matFilePath = strrep(matFilePath,'.TXT','.mat');
+    matFilePath = strrep(matFilePath,'.csv','.mat');
+    matFilePath = strrep(matFilePath,'.CSV','.mat');
+    
+    %Convert to character array for functionality
+    matFilePath = char(matFilePath);
+    filePath = char(filePath);
+    
+    %Convert the file if it has not already been converted
+    if exist(matFilePath, 'file') ~= 2
+        disp(['No mat file, reading plain text file for ' fileName]);
+        
+        %Get import options object
+        opts = detectImportOptions(filePath);
+        %Y-Pods and U-Pods have different formatting
+        if contains(fileName,'YPOD') 
+            rawData = readtable(filePath,'ReadVariableNames',false, 'ImportErrorRule','omitrow');
+        else
+            rawData = readtable(filePath,'ReadVariableNames',true, 'ImportErrorRule','omitrow');
+        end
+        
+        %Save the file and then clear the variable for next loop
+        save(matFilePath, 'rawData');
+        clear rawData;
+    end
+end
+end
+
