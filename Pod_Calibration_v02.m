@@ -1,7 +1,9 @@
 %% USAGE NOTES
 %{
 This code is based on Ricardo Piedraheta's Pod_calibration_generation
-code, with attemps to make it more readable and more easily modified
+code, with attemps to make it more readable and more easily modified.
+This was developed on Matlab R2017b, so some unhandled errors may be caused
+by the use of different versions.
 %}
 %% Changelog
 %{
@@ -19,7 +21,7 @@ disp('-----------------------------------------------------')
 disp('Performing system checks and housekeeping...')
 
 %Clear variables and close ALL open figures
-clear; 
+clear variables; 
 close all;
 
 %Fix for cross compatibility between OSX and Windows
@@ -45,36 +47,33 @@ settingsSet.convertOnly = 0;  %Only convert (unconverted) files into .mat files
 settingsSet.generateCal = 1;  %Generate a calibration - if no, will only search for existing calibrations
 settingsSet.applyCal = 1;  %Apply calibrations to the pod files in the "field" folder
 settingsSet.timeAvg = 1;  %Time in minutes to average data by for analysis
-settingsSet.groupMethod = 1;  %Use median or mean values when grouping by timestamp - 1=median, 0=mean
-settingsSet.datetimestrs = {'yyyy.MM.dd H.m.s'}; %Datetime formats to use when trying to convert non-standard import datetime strings
+settingsSet.groupMethod = 1;  %Use median or mean values when grouping by timestamp - 0=mean, 1=median, 2=linear interpolation, 3=smoothing spline
+settingsSet.datetimestrs = {'M/d/yy H:mm:ss','yyyy.MM.dd H.m.s'}; %Datetime formats to use when trying to convert non-standard import datetime strings
 settingsSet.datestrings = {'yyyy.MM.dd','MM-dd-yyyy'}; %Date formats to use when trying to convert non-standard import dates
 settingsSet.timestrings = {'H.m.s'}; %Date formats to use when trying to convert non-standard import times
 settingsSet.outFolder=['Outputs_' datestr(now,'yymmddHHMMSS')]; %Create a unique name for the save folder
 
 %Note: for these lists, enter function names in the order in which you'd like them to be performed (if it matters)
 %Please also note that these increase multiplicatively, so selecting too many options will significantly increase analysis time
-settingsSet.refGas = {'CH4'}; %Currently only partially works with one pollutant, but entered as cell array in case multiple pollutant functionality is added
+settingsSet.refGas = {'testpoint'}; %Currently only partially works with more than one pollutant, but entered as cell array in case multiple pollutant functionality is added
 settingsSet.refTZ = {-7}; %Time zone in which the reference data is reported.  Cell structure is used to allow possible extension to multiple files later
-settingsSet.refPreProcess = {'removeNaNs','remove999'}; %Preprocessing functions for reference data
+settingsSet.refPreProcess = {'removeNaNs','remove999','sortbyTime','applyAvging'}; %Preprocessing functions for reference data
 
-settingsSet.podSensors = {'Fig2600'}; %Sensors for use in calibration equations
+settingsSet.podSensors = {'co2','fig2600_s','fig2602_s','bl_mocon','e2v_s',...
+    'quadstat_1_m','quadstat_2_m','quadstat_3_m','quadstat_4_m',...
+    'outbrd1_s','outbrd2_s','outbrd3_s','outbrd4_s'}; %Sensors for use in calibration equations ,'NO_B4' ,'MICS5121wp_sob'
 settingsSet.envSensors = {'temperature','humidity'}; %Sensors for use in calibration equations
-settingsSet.podPreProcess = {'rem30','removeNaNs','podTimeZone','TempC2K','RbyR0'}; %Preprocessing functions for pod data
+settingsSet.podPreProcess = {'removeNaNs','sortbyTime','applyAvging','rem30','podTimeZone','TempC2K','makePCs'}; %Preprocessing functions for pod data
 
-settingsSet.regList = {'line3'}; %Regressions to evaluate
+settingsSet.regList = {'clusterAll'}; %Regressions to evaluate
 
 settingsSet.valList = {'randVal', 'timeFold'}; %Validation set selections
 settingsSet.nFolds = 10; %Number of 'folds' for validation (e.g. 10 folds = 1/10 = 10% dropped for validation)
 settingsSet.nFoldRep = 4; %Number of folds to actually use (will be selected in order from first to last)
 
-settingsSet.statsList = {'myRMSE', 'myAIC'}; %Statistics to calculate - THESE ARE NOT YET WRITTEN
-settingsSet.plotsList = {'timeSeries', 'acfPlot'}; %Plotting functions - NOT YET USED
+settingsSet.statsList = {'podRMSE'}; %Statistics to calculate - THESE ARE NOT YET WRITTEN
+settingsSet.plotsList = {'timeseriesPlot', 'acfPlot'}; %Plotting functions
 
-
-%These variables are for tracking what part of the analysis is running (for functions that need this info)
-settingsSet.currentPod = 'none';  %This is a dummy variable that is updated each loop to allow functions to know what pod they are analyzing (if necessary)
-settingsSet.currentRegression = 'none';  %This is a dummy variable that is updated each loop to allow functions to know what regression they are analyzing (if necessary)
-settingsSet.currentValidation = 'none';  %This is a dummy variable that is updated each loop to allow functions to know what validation they are analyzing (if necessary)
 %-----------------------------------------------------------------
 
 
@@ -98,50 +97,41 @@ disp('Creating output folder...');
 mkdir(settingsSet.analyzeDir, settingsSet.outFolder)
 settingsSet.outpath = [settingsSet.analyzeDir,slash,settingsSet.outFolder]; %Store that file path for use later
 
-%% Read Pod Inventory and Deployment Log
+
+
+%% ------------------------------Read Pod Inventory and Deployment Log------------------------------
 %The deployment log is used to determine if data should be analyzed based on the timestamp
 disp('Reading deployment log...');
 settingsSet.deployLog = readDeployment(settingsSet.analyzeDir);
 
 %The pod inventory is used to assign headers and therefore determine which columns contain required information. 
-%At a minimum, each pod must have an enrgy with labels 'temperature', 'humidity', 'datetime' or 'Unix time', and then containing the names of sensors entered above
+%At a minimum, each pod should have an enrgy with labels 'temperature', 'humidity', 'datetime' or 'Unix time', and then containing the names of sensors entered above
 disp('Reading pod inventory...');
-settingsSet.podInventory = readInventory(settingsSet.analyzeDir);
+settingsSet.podList = readInventory(settingsSet);
 
 
-%% Convert Data to .mat Files as Needed
+
+%% ------------------------------Convert Data to .mat Files as Needed------------------------------
 %Import the Pod Data
 disp('Converting unconverted data files to .mat files...');
 
-%Convert colocated pod files to .mat filess
-if ~isempty(settingsSet.fileList.colocation.pods.files)
-    disp('-Converting colocated pod files...')
-    convertDatatoMat(settingsSet.fileList.colocation.pods);
-    settingsSet.fileList.colocation.pods = assignPodHeaders(settingsSet.fileList.colocation.pods,settingsSet.podInventory);
-end
+%Convert colocated pod files to .mat files
+convertPodDatatoMat(settingsSet);
 
-%Convert field (not colocated) pod files to .mat
-if ~isempty(settingsSet.fileList.field.pods.files)
-    disp('-Converting field pod files...')
-    convertDatatoMat(settingsSet.fileList.field.pods);
-    settingsSet.fileList.field.pods = assignPodHeaders(settingsSet.fileList.field.pods,settingsSet.podInventory);
-end
+%Convert reference files to .mat files
+convertRefDatatoMat(settingsSet);
 
-%Convert colocated reference files to .mat
-if ~isempty(settingsSet.fileList.colocation.reference.files)
-    disp('-Converting colocated reference files...')
-    convertDatatoMat(settingsSet.fileList.colocation.reference);
-end
-
-% End the program if user has selected that they only want to convert files
+%End the program if user has selected that they only want to convert files
 assert(~settingsSet.convertOnly , 'Finished converting files, and "Convert Only" was selected'); 
+
+
 
 %% These are the number of reference files, pods, regressions, validations, and folds to evaluate
 nref = length(settingsSet.fileList.colocation.reference.files.bytes); %Number of reference files
-if ischar(settingsSet.podList)%Account for only analyzing one Pod (indexing is weird with a list of one)
+if ischar(settingsSet.podList.podName)%Account for only analyzing one Pod (indexing is weird with a list of one)
     nPods=1;
 else
-    nPods=length(settingsSet.podList);
+    nPods=size(settingsSet.podList.podName,1);
 end
 nRegs = length(settingsSet.regList); %Number of regression functions
 nVal = length(settingsSet.valList); %Number of validation functions
@@ -149,207 +139,226 @@ nFolds = settingsSet.nFoldRep;  %Number of folds to evaluate
 nStats = length(settingsSet.statsList); %Number of statistical functions to apply
 nPlots = length(settingsSet.plotsList); %Number of plotting functions
 
-fprintf('* Total number of loops to evaluate: %d * Beginning...\n',nref*nPods*nRegs*nVal*nFolds);
+fprintf('*** Total number of loops to evaluate: %d *** \n Beginning...\n',nref*nPods*nRegs*nVal*nFolds);
 
-%Create empty cell matrix to store fitted models and statistics for each combination
-fittedMdls = cell(nref,nPods,nRegs,nVal,nFolds); 
-mdlStats = cell(nref,nPods,nRegs,nVal,nFolds,nStats);
+
 
 %% --------------------------Fit Calibration Equations--------------------------
-if settingsSet.generateCal
-    %% --------------------------START REFERENCE FILE LOOP------------------------------
-    %Note, these reference files will be analyzed independently
-    %Only the time and gas concentration will be extracted from each reference file
-    %If you want to combine multiple colocations into one calibration, manually append the reference files into a single file
-    for i = 1:nref
-        %% Load the reference file
-        %Get the reference file to load
-        %Indexing is weird if only one file
-        if nref==1
-            reffileName = settingsSet.fileList.colocation.reference.files.name;
-        else
-            reffileName = settingsSet.fileList.colocation.reference.files.name{i};
-        end
+%% --------------------------START REFERENCE FILE LOOP------------------------------
+%Note, these reference files will be analyzed independently
+%Only the time and gas concentration will be extracted from each reference file
+%If you want to combine multiple colocations into one calibration, manually append the reference files into a single file
+for i = 1:nref
+    %Keep track of the loop number in case it's needed by a sub function
+    settingsSet.loops.i=i;
+    
+    %If statement checks whether to generate models and skips this loop if not
+    if ~settingsSet.generateCal
+        break
+    end
+    
+    %% ------------------------------Get Reference Data------------------------------
+    %Get the reference file to load
+    %Indexing is weird if only one file
+    if nref==1
+        reffileName = settingsSet.fileList.colocation.reference.files.name;
+    else
+        reffileName = settingsSet.fileList.colocation.reference.files.name{i};
+    end
+    
+    %Load the reference file into memory
+    fprintf('-Importing reference file %s ...\n',reffileName);
+    Y_ref = loadRefData(settingsSet);
+    
+    %Extract just the datestring and the gas of interest
+    disp('-Extracting important variables from reference data');
+    [Y_ref, yt] = dataExtract(Y_ref, settingsSet, settingsSet.refGas);
+    
+    %% Pre-process Reference Data (Filter, normalize, etc)
+    fprintf('-Pre-processing reference file: %s ...\n',reffileName);
+    for ii = 1:length(settingsSet.refPreProcess)
+        settingsSet.loops.ii=ii;
+        %Get string representation of function - this must match the name of a filter function
+        filtFunc = settingsSet.refPreProcess{ii};
+        fprintf('--Applying reference preprocess function %s ...\n',filtFunc);
+        %Convert this string to a function handle to feed the pod data to
+        filtFunc = str2func(filtFunc);
         
-        %Load the reference file into memory
-        fprintf('-Importing reference file %s ...\n',reffileName);
-        refData = loadRefData(settingsSet,reffileName);
+        %Save filtered reference data into Y
+        [Y_ref,yt] = filtFunc(Y_ref, yt, settingsSet);
         
-        %Extract just the datestring and the gas of interest
-        disp('-Extracting important variables from reference data');
-        [Y, yt] = dataExtract(refData, settingsSet, settingsSet.refGas);
+        %Clear for next loop
+        clear filtFunc
+    end%loop for preprocessing reference data
+    
+    
+    
+    %% --------------------------START POD LOOP------------------------------
+    for j = 1:nPods
         
-        %% Pre-process Reference Data (Filter, normalize, etc)
-        fprintf('-Pre-processing reference file: %s ...\n',reffileName);
-        for ii = 1:length(settingsSet.refPreProcess)
-            %Get string representation of function - this must match the name of a filter function
-            filtFunc = settingsSet.refPreProcess{ii};
-            fprintf('--Applying reference preprocess function %s ...\n',filtFunc);
+        %Create empty cell matrices to store fitted models and statistics for each combination
+        fittedMdls = cell(nRegs,nVal,nFolds);
+        mdlStats = cell(nRegs,nVal,nStats);
+        Y_hat.cal = cell(nRegs,nVal,nFolds);
+        Y_hat.val = cell(nRegs,nVal,nFolds);
+        valList = cell(nVal,1);
+        
+        %Keep track of the loop number in case it's needed by a sub function
+        settingsSet.loops.j=j;
+        fprintf('---Generating calibrations for %s ...\n',settingsSet.podList.podName{j});
+        %% Load Pod Data
+        fprintf('--Loading data for %s ...\n', settingsSet.podList.podName{j});
+        X = loadPodData(settingsSet.fileList.colocation.pods, settingsSet.podList.podName{j});
+        
+        %Extract just columns needed
+        disp('--Extracting important variables from pod data');
+        [X, xt] = dataExtract(X, settingsSet, [settingsSet.podSensors settingsSet.envSensors]);
+        
+        %% Pre-Process Pod Data (Filter, normalize, etc)------------------------------
+        disp('--Applying selected pod data preprocessing...');
+        for jj = 1:length(settingsSet.podPreProcess)
+            %Keep track of the loop number in case it's needed by a sub function
+            settingsSet.loops.jj=jj;
+            %Get string representation of function - this must match the name of a regression function
+            filterFunc = settingsSet.podPreProcess{jj};
+            fprintf('---Applying pod preprocess function %s ...\n',filterFunc);
             %Convert this string to a function handle to feed the pod data to
-            filtFunc = str2func(filtFunc);
-            %Save filtered reference data into Y
-            [Y,yt] = filtFunc(Y, yt, settingsSet);
-            %Clear for next loop
-            clear filtFunc
-        end%loop for preprocessing reference data
+            filterFunc = str2func(filterFunc);
+            
+            %Apply the filter function
+            [X, xt] = filterFunc(X, xt, settingsSet);
+            
+            %Clear function for next loop
+            clear filterFunc
+        end%pod preprocessing loop
+        
+        %Match reference and Pod data based on timestamps
+        disp('--Joining pod and reference data...');
+        [Y, X, t] = alignRefandPod(Y_ref,yt,X,xt,settingsSet);  
+        
+        %Use deployment log to verify that only colocated data is included
+        disp('--Checking data against the deployment log...');
+        [Y, X, t] = deployLogMatch(Y,X,t,settingsSet);
+        
+        
+        %% --------------------------START VALIDATION SETS LOOP------------------------------
+        %Create a vector used to separate calibration and validation data sets
+        for k = 1:nVal
+            %Keep track of the loop number in case it's needed by a sub function
+            settingsSet.loops.k=k;
+            %Get string representation of validation selection function
+            validFunc = settingsSet.valList{k};
+            fprintf('----Selecting validation set with function: %s ...\n',validFunc);
+            %Convert this string to a function handle for the validation selection function
+            validFunc = str2func(validFunc);
+            
+            %Run that validation function and get the list of points to fit/validate on for each fold
+            valList{k} = validFunc(Y, X, t, settingsSet.nFolds);
+            %Clear the validation selection function for tidyness
+            clear validFunc
+            
+            
+            
+            %% --------------------------START REGRESSIONS LOOP------------------------------
+            %Fit regression equations and validate them
+            for m = 1:nRegs
+                %Keep track of the loop number in case it's needed by a sub function
+                settingsSet.loops.m=m;
+                fprintf('-----Fitting regression%s ...\n',settingsSet.regList{m});
+                
+                %Get string representation of functions - this must match the name of a function saved in the directory
+                regFunc = settingsSet.regList{m};
+                %Convert this string to a function handle for the regression
+                regFunc = str2func(regFunc);
+                %Get the generation function for that regression
+                %Note that the function must be set up correctly - see existing regression functions for an example
+                calFunc = regFunc(1);
+                %Get the application function for that regression
+                valFunc = regFunc(2);
+                %Clear the main regression function for tidyness
+                clear regFunc
+                
+                
+                
+                %% --------------------------START K-FOLDS LOOP------------------------------
+                %For each repetition (fold) of the validation list, select the data and fit a regression to it
+                for kk = 1:nFolds
+                    %Keep track of the loop number in case it's needed by a sub function
+                    settingsSet.loops.kk=kk;
+                    fprintf('------Using calibration/validation fold #%d ...\n',kk);
+                    
+                    %% Fit the selected regression
+                    %Fit the regression and get the estimates and fitted coefficients
+                    %Indices for the regression model array are: (m=nRegs,k=nVal,kk=nFolds)
+                    disp('-------Fitting regression...');
+                    [fittedMdls{m,k,kk}, Y_hat.cal{m,k,kk}] = calFunc(Y(valList{k}~=kk,:), X(valList{k}~=kk,:), settingsSet);
+                    
+                    %% Apply the fitted regression to the validation data
+                    %Apply the fitted regression to the validation data
+                    disp('-------Validating regression...');
+                    Y_hat.val{m,k,kk} = valFunc(X(valList{k}==kk,:),fittedMdls{m,k,kk},settingsSet);
+                    
+                end %loop of calibration/validation folds
+
+                
+                %% ------------------------------Determine statistics------------------------------
+                disp('-----Running statistical analyses...');
+                for mm = 1:nStats
+                    %Keep track of the loop number in case it's needed by a sub function
+                    settingsSet.loops.mm=mm;
+                    %Get string representation of function - this must match the name of a function
+                    statFunc = settingsSet.statsList{mm};
+                    fprintf('------Applying statistical analysis function %s ...\n',statFunc);
+                    
+                    %Convert this string to a function handle to feed the pod data to
+                    statFunc = str2func(statFunc);
+                    
+                    %Apply the statistical function m=nRegs,k=nVal,mm=nStats
+                    mdlStats{m,k,mm} = statFunc(X, Y, Y_hat, valList{k}, settingsSet);
+                end%loop of common statistics to calculate
+
+                
+            end%loop of regressions
+            
+        end%loop of calibration/validation methods
+        
+        
+        %% ------------------------------Create plots----------------------------------------
+        disp('-----Plotting estimates and statistics...');
+        for mm = 1:nPlots
+            %Keep track of the loop number in case it's needed by a sub function
+            settingsSet.loops.mm=mm;
+            %Get string representation of function - this must match the name of a function
+            plotFunc = settingsSet.plotsList{mm};
+            fprintf('------Running plotting function %s ...\n',plotFunc);
+            
+            %Convert this string to a function handle to feed the pod data to
+            plotFunc = str2func(plotFunc);
+            
+            %Run the plotting function
+            plotFunc(t, X, Y, Y_hat,valList,mdlStats,settingsSet);
+        end%loop of plotting functions
+
+        
+        %% ------------------------------Save info for each pod for future reference------------------------------
+        disp('---Saving estimates...');
+        temppath = fullfile(settingsSet.outpath,['Estimates_' settingsSet.podList.podName{j}]); %Create file path for estimates
+        save(char(temppath),'Y_hat'); %Save out model estimates
+
+        disp('---Saving fitted regression models...');
+        temppath = fullfile(settingsSet.outpath,['fittedModels_' settingsSet.podList.podName{j}]); %Create file path for fitted coefficients to save
+        save(char(temppath),'fittedMdls'); %Save out fitted regression models
+
         
         %Clear temporary variables
-        clear refData
-        
-        %Average or find median values for the reference data
-        [Y, yt] = applyAvging(Y, yt, settingsSet);
-        
-        
-        %% --------------------------START POD LOOP------------------------------
-        for j = 1:nPods
-            
-            fprintf('---Generating calibrations for %s ...\n',settingsSet.podList{j});
-            %% Load Pod Data
-            fprintf('--Loading data for %s ...\n', settingsSet.podList{j});
-            podData = loadPodData(settingsSet.fileList.colocation.pods, settingsSet.podList{j});
-            settingsSet.currentPod = settingsSet.podList{j}; %Keep track of pod currently being analyzed
-            
-            %Extract just columns needed
-            disp('--Extracting important variables from pod data');
-            [X, xt] = dataExtract(podData, settingsSet, [settingsSet.podSensors settingsSet.envSensors]);
-            clear podData
-            
-            %% Pre-Process Pod Data (Filter, normalize, etc)
-            disp('--Applying selected pod data preprocessing...');
-            for jj = 1:length(settingsSet.podPreProcess)
-                %Get string representation of function - this must match the name of a regression function
-                filterFunc = settingsSet.podPreProcess{jj};
-                fprintf('---Applying pod preprocess function %s ...\n',filterFunc);
-                
-                %Convert this string to a function handle to feed the pod data to
-                filterFunc = str2func(filterFunc);
-                
-                %Apply the filter function
-                [X, xt] = filterFunc(X, xt, settingsSet);
-                
-                clear filterFunc
-            end%pod preprocessing loop
-            
-            %Average or find median values for the processed pod data
-            [X, xt] = applyAvging(X, xt, settingsSet);
-            
-            %Match reference and Pod data based on timestamps
-            disp('--Joining pod and reference data...');
-            [Y, X, t] = alignRefandPod(Y,yt,X,xt,settingsSet);
-            clear xt yt
-            
-            %Use deployment log to verify that only colocated data is included
-            disp('--Checking data against the deployment log...');
-            [Y, X, t] = deployLogMatch(Y,X,t,settingsSet.deployLog,settingsSet.podList{j},reffileName);
-            
-            %% Generate calibration using each validation/calibration dataset selections
-            for k = 1:nVal
-                %Get string representation of validation selection function
-                valFunc = settingsSet.valList{k};
-                fprintf('----Selecting validation set with function: %s ...\n',valFunc);
-                settingsSet.currentValidation = settingsSet.valList{k};
-                %Convert this string to a function handle for the validation selection function
-                valFunc = str2func(valFunc);
-                %Run that validation function and get the list of points to fit/validate on for each fold
-                valList = valFunc(Y, X, t, settingsSet.nFolds);
-                
-                %% Fit regression equations and validate them
-                for m = 1:nRegs
-                    fprintf('-----Fitting regression%s ...\n',settingsSet.regList{m});
-                    settingsSet.currentRegression = settingsSet.regList{m};
-                    
-                    %Create empty arrays to hold estimates output by model
-                    Y_hat.cal = NaN(1,3);
-                    Y_hat.val = NaN(1,3);
-                    
-                    %Get string representation of functions - this must match the name of a function saved in the directory
-                    regFunc = settingsSet.regList{m};
-                    %Convert this string to a function handle for the regression
-                    regFunc = str2func(regFunc);
-                    %Get the generation function for that regression
-                    %Note that the function must be set up correctly - see existing regression functions for an example
-                    calFunc = regFunc(1);
-                    %Get the application function for that regression
-                    valFunc = regFunc(2);
-                    
-                    %For each repetition (fold) of the validation selection criteria, select the data
-                    for kk = 1:nFolds
-                        fprintf('------on calibration/validation fold #%d ...\n',kk);
-                        
-                        %% Fit the selected regression
-                        %Fit the regression and get the estimates and fitted coefficients
-                        %Indices for the regression model array are: (i=nRef, j=nPods, m=nRegs,k=nVal,kk=nFolds)
-                        disp('-------Fitting regression...');
-                        [fittedMdls{i,j,m,k,kk}, Y_hat_temp] = calFunc(Y(valList~=kk,:), X(valList~=kk,:), settingsSet);
-                        
-                        %Store the calibrated estimates in a matrix
-                        foldn = ones(length(Y_hat_temp),1)*kk; %Label for what fold this was fitted on
-                        Y_hat_temp = [datenum(t(valList~=kk,:)) Y_hat_temp foldn]; %Join together as timeseries
-                        if kk==1; Y_hat.cal=Y_hat_temp;else;Y_hat.cal=[Y_hat.cal;Y_hat_temp];end %Assign to the Y_hat variable
-                        clear Y_hat_temp
-                        
-                        
-                        %% Validate the fitted regression on the validation data
-                        %Apply the fitted regression to the validation data
-                        Y_hat_temp = valFunc(X(valList==kk,:),fittedMdls{i,j,m,k,kk},settingsSet);
-                        %Store the validation estimates in a matrix
-                        disp('-------Validating regression...');
-                        %Store the calibrated estimates in a matrix
-                        foldn = ones(length(Y_hat_temp),1)*kk;
-                        Y_hat_temp = [datenum(t(valList==kk,:)) Y_hat_temp foldn];
-                        if kk==1; Y_hat.val=Y_hat_temp;else;Y_hat.val=[Y_hat.val;Y_hat_temp];end %Assign to the Y_hat variable
-                        clear Y_hat_temp
-                        
-                    end %loop of calibration/validation folds
-                    
-                    %Save estimates to the output folder for future reference
-                    disp('-----Saving estimates...');
-                    yhat_path = fullfile(settingsSet.outpath,['Estimates_' settingsSet.currentPod settingsSet.currentValidation settingsSet.currentRegression]); %Create file path for fitted coefficients to save
-                    save(char(yhat_path),'Y_hat'); %Save out model estimates
-                    
-                    
-                    %% Determine statistics
-                    disp('-----Running statistical analyses...');
-                    for mm = 1:nStats
-                        %Get string representation of function - this must match the name of a function
-                        statFunc = settingsSet.statsList{mm};
-                        fprintf('------Applying statistical analysis function %s ...\n',statFunc);
-                        
-                        %Convert this string to a function handle to feed the pod data to
-                        statFunc = str2func(statFunc);
-                        
-                        %Apply the statistical function i=nRef, j=nPods,m=nRegs,k=nVal,kk=nFolds,mm=nStats
-                        mdlStats{i,j,m,k,kk,mm} = statFunc(X, Y, Y_hat, settingsSet);
-                    end%loop of common statistics to calculate
-                    
-                    
-                    %% Create plots
-                    disp('-----Plotting estimates and statistics...');
-                    for mm = 1:nPlots
-                        %Get string representation of function - this must match the name of a function
-                        plotFunc = settingsSet.plotsList{mm};
-                        fprintf('------Running plotting function %s ...\n',plotFunc);
-                        
-                        %Convert this string to a function handle to feed the pod data to
-                        plotFunc = str2func(plotFunc);
-                        
-                        %Run the plotting function
-                        plotFunc(t, X, Y, Y_hat,valList,settingsSet);
-                    end%loop of plotting functions
-                    
-                    
-                end%loop of regressions
-            end%loop of calibration/validation methods
-            clear X t
-        end%loop for each pod
-        clear Y
-    end%loop for each reference file
-end%If statement for checking if models should be fitted to colocated data
+        clear X xt t temppath valList
+    end%loop for each pod
+    
+    %Clear temporary variables
+    clear Y_ref Y yt
+end%loop for each reference file
 
-%% Save out important information for future replication/application
-disp('Saving fitted regression models...');
-regPath = fullfile(settingsSet.outpath,'run_fittedModels'); %Create file path for fitted coefficients to save
-save(char(regPath),'fittedMdls'); %Save out fitted regression models
+%% Save out settings for future replication/application
 disp('Saving settings structure...');
 settingsPath = fullfile(settingsSet.outpath,'run_settings'); %Create file path for settings to save
 save(char(settingsPath),'settingsSet'); %Save out settings
@@ -360,10 +369,10 @@ save(char(settingsPath),'settingsSet'); %Save out settings
 if settingsSet.applyCal
     %% If no calibrations were generated, have to load a set of fitted models from elsewhere
     if ~settingsSet.generateCal
-        %Ask the user to select a mat file with the fitted models to apply
+        %Ask the user to select a file with the fitted models to apply
         disp('----Select file with previous analysis...');
         oldRegsPath = uigetdir(pwd,'Select folder with previous analysis');
-        assert(~isequal(oldRegsFiles,0),'No file selected, run ended'); %Check that file was selected
+        assert(~isequal(oldRegsPath,0),'Error: no file selected, run ended'); %Check that file was selected
         
         %Load the old fitted models file into memory
         disp('----Loading previously fitted models...');
@@ -382,17 +391,23 @@ if settingsSet.applyCal
         oldsettingsSet = settingsSet;
     end
     
-    %Loop through each pod selected from the deployment file that you originally selected (where the new data is)
+    %% Loop through each pod selected from the deployment file that you originally selected (where the new data is)
     for j = 1:nPods
-        fprintf('---Applying fitted calibrations to %s ...\n',settingsSet.podList{j});
+        fprintf('---Applying fitted calibrations to %s ...\n',settingsSet.podList.podName{j});
         
-        %Check that the pod and reference gas are found in the old data
+        %Check that reference gas was used for the old data
         assert(any(strcmp(oldsettingsSet.refGas,settingsSet.refGas)),'Pollutant is not the same!');
-        assert(any(strcmp(settingsSet.podList{j},oldsettingsSet.podList)),['Pod ' settingsSet.podList{j} ' is not found in the original model fitting!']);
+        
+        %Check that a calibration was generated for this pod
+        if ~any(strcmp(settingsSet.podList.podName{j},oldsettingsSet.podList.podName))
+            warning(['Pod ' settingsSet.podList.podName{j} ' is not found in the old calibration set!']);
+            %If it's not in the old settings set, move onto the next loop (pod)
+            continue
+        end
         
         %Get the position the pod was listed in the old run file 
-        podPos = 1:length(oldsettingsSet.podList);
-        podPos = podPos(strcmp(settingsSet.podList{j},oldsettingsSet.podList)); 
+        podPos = 1:length(oldsettingsSet.podList.podName);
+        podPos = podPos(strcmp(settingsSet.podList.podName{j},oldsettingsSet.podList.podName)); 
         
         %% Allow users to select fitted equations to actually apply
         %Make array to hold user's decisions (1=keep, 0=ignore)
@@ -418,6 +433,7 @@ if settingsSet.applyCal
                         tempMdls(i,podPos,m,k,kk) = modelNum;
                         disp([num2str(modelNum) ': Model: ' regName ', Validation: ' valName ', Fold #' num2str(kk)]);
                         reportFunc(fittedMdls{i,podPos,m,k,kk},oldsettingsSet);
+                        fprintf('---------------------\n');
                     end
                 end
             end
@@ -429,22 +445,19 @@ if settingsSet.applyCal
         %Loop through and mark these models for use
         keepMdls = zeros(size(fittedMdls));
         for i = 1:length(keepMods)
-            keepMdls(tempMdls==str2num(keepMods{i}))=1;
+            keepMdls(tempMdls==str2double(keepMods{i}))=1;
         end
         clear tempMdls
         
         %% Load the field pod data
-        fprintf('--Loading data for %s ...\n', settingsSet.podList{j});
-        podData = loadPodData(settingsSet.fileList.colocation.pods, settingsSet.podList{j});
-        settingsSet.currentPod = settingsSet.podList{j}; %Keep track of pod currently being analyzed
+        fprintf('--Loading data for %s ...\n', settingsSet.podList.podName{j});
+        X = loadPodData(settingsSet.fileList.colocation.pods, settingsSet.podList.podName{j});
         
         %Extract just columns needed
         disp('--Extracting important variables from pod data');
-        [X, xt] = dataExtract(podData, settingsSet, [settingsSet.podSensors settingsSet.envSensors]);
+        [X, xt] = dataExtract(X, settingsSet, [settingsSet.podSensors settingsSet.envSensors]);
         clear podData
         
-        %Average or find median values for the processed pod data
-        [X, xt] = applyAvging(X, xt, settingsSet);
         
         %% Pre-Process Pod Data (Filter, normalize, etc)
         disp('--Applying selected pod data preprocessing...');
@@ -462,7 +475,6 @@ if settingsSet.applyCal
             clear filterFunc
         end%pod preprocessing loop
         
-        %% Apply averaging and filters
         
         %% Loop through saved regressions and apply them to field data
         for m = 1:nRegs
@@ -474,5 +486,3 @@ if settingsSet.applyCal
         end%loop through each regression to apply
     end
 end%if statement that allows application to field data
-
-
