@@ -40,8 +40,9 @@ for i = 1:length(filesStruct.files.bytes)
         
         %Read in the data
         opts = detectImportOptions(filePath,'Delimiter',',');
-        opts = setvartype(opts,{'datetime'},'char');
-        rawData = readtable(filePath, opts, 'ReadVariableNames',logical(1));
+        opts = setvartype(opts,opts.VariableNames,[{'char'} repmat({'double'},1,size(opts.VariableNames,2)-1)]);
+        opts.VariableNames{1} = 'datetime';
+        rawData = readtable(filePath, opts);
         
         %Save the file and then clear the variable for next loop
         save(matFilePath, 'rawData');
