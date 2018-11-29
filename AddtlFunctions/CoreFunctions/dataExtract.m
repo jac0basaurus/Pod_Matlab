@@ -1,14 +1,21 @@
 function [X, t] = dataExtract(rawData, settingsSet, colsToKeep)
+%This function goes through the raw data and extracts the specified columns
+%listed in "colsToKeep", plus a vector of the datetime values.  It will 
+%throw an error if it's not clear which column is the "correct" datetime.
+%NOTE: If any of the requested column names contains "allcol", every column
+%not labeled as date/time will be passed along (e.g. for PCA analysis).
+%This may include columns that are all NaN or could otherwise cause issues
+%without proper processing later on
 
 %Get list of column names from the loaded file
 columnNames = rawData.Properties.VariableNames;
 
 %Initialize selection vectors
-keep = zeros(1,length(columnNames));
+keep = false(1,length(columnNames));
 foundDateTime = 0;
 dateOnly = 0;
 timeOnly = 0;
-foundGases = zeros(1,length(colsToKeep));
+foundCols = zeros(1,length(colsToKeep));
 
 %Loop through reference file columns and selected gases to extract only important columns
 for i =1:length(columnNames)
@@ -16,14 +23,20 @@ for i =1:length(columnNames)
     %Get current column name (for code clarity)
     currentCol = columnNames{i};
     
-    %----Check if column contains date and time info for alignment----
+    %% ----Check if column contains date and time info for alignment----
     if strcmpi(currentCol,'datetime')
         
         %Change variable name for easier referencing
         rawData.Properties.VariableNames{i}='datetime';
         
-        %If already in datetime format, don't bother converting
+        %If it's already a datetime, make sure it's not imported wrong
+        if isdatetime(rawData.datetime)
+            flag = median(rawData.datetime,'omitnan');
+            assert(flag > datetime(1990,1,1) && flag < datetime(2100,1,1),'Datetime was autoimported and had OOB dates...');
+        end
+        
         if(~isdatetime(rawData.datetime))
+        %% If not in datetime format, try converting
             %Try to convert the input datetime into datetime using default values and then values defined in the settingsSet structure
             try
                 %Make temporary vector to try to convert datetime values
@@ -66,8 +79,8 @@ for i =1:length(columnNames)
         foundDateTime=foundDateTime+1;
         
         
-        %----Try Unix/posix timestamps----
     elseif strcmpi(currentCol,'UNIX') || strcmpi(currentCol,'POSIX') 
+        %% ----Try Unix/posix timestamps----
     
         %Change variable name for easier referencing
         rawData.Properties.VariableNames{i}='datetime';
@@ -79,8 +92,8 @@ for i =1:length(columnNames)
         foundDateTime=foundDateTime+1;
         
         
-        %----Allow for the use of separate time and date columns----
     elseif strcmpi(currentCol,'date') 
+        %% ----Allow for the use of separate time and date columns----
         
         rawData.Properties.VariableNames{i}='date';
         
@@ -116,14 +129,20 @@ for i =1:length(columnNames)
         end
     else
         
-        %----Check if column contains another variable marked to keep----
+        
+        %% ----Check if column contains another variable marked to keep----
+        %Check if this column was one of those requested
         for ii = 1:length(colsToKeep)
             if any(regexpi(currentCol,colsToKeep{ii}))
-                keep(i)=1;
-                foundGases(ii)=foundGases(ii)+1;
+                keep(i)=true;
+                foundCols(ii)=foundCols(ii)+1;
                 %rawData.Properties.VariableNames{i}=colsToKeep{ii};
+            elseif any(contains(colsToKeep,'allcol')) && isnumeric(rawData.(columnNames{i}))
+                %Keep this data if the user selected to keep all (non-time) columns
+                keep(i) = true;
             end
         end
+        
     end
 end
 
@@ -134,21 +153,19 @@ if (foundDateTime == 0) && (dateOnly > 0) && (timeOnly >0)
 end
 
 %Check that everything was found okay
-assert(foundDateTime==1,'Could not identify a singular date column when extracting data');
-if any(foundGases~=1)
-    errorMessage = strcat('Could not find the column for gas(es):',colsToKeep(foundGases==0));
-    error(errorMessage{1});
+assert(foundDateTime==1,'Could not identify a singular date column when extracting data!  Only one column may be labeled "datetime" or contain "posix" or "unix"');
+
+%Warn if a data column was not located (don't throw an error)
+for i=1:length(foundCols)
+    if foundCols(i)~=1
+        warning(['Identified ' num2str(foundCols(i)) ' columns for: ' colsToKeep{i}]);
+    end
 end
 
 
-%Return only columns that are in the sensed gas list
-X=rawData(:,keep==1);
+%Return only columns that are in the keep list
+X=rawData(:,keep);
 
 %Also return vector of datetimes for timeseries analysis
 t = rawData.datetime;
 end
-
-
-
-
-
