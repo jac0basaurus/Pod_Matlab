@@ -6,7 +6,7 @@ if ispc == 1; slash = '\'; else; slash = '/'; end
 
 %The deployment log should be stored in a folder titled "Logs"
 logDir = [analyzeDir slash 'Logs'];
-assert(exist(logDir,'dir')~=0,'Folder for deployment log and inventory does not exist!')
+assert(exist(logDir,'dir')~=0,'Folder "Logs" for deployment log and inventory does not exist!')
 
 %Create the full file path
 filePath = fullfile(logDir,'Deployment Log.csv');
