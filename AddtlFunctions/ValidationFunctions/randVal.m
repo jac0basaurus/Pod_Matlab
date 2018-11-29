@@ -10,7 +10,7 @@ n_val = floor((size(Y,1)-1)/n);
 
 %Initialize list of outputs where the number = the fold to use that as validation
 %(i.e. rows with valList=1 are validation for the 1st fold)
-valList = zeros(size(Y,1),1);
+valList = ones(size(Y,1),1)*n;
 
 for i = 1:n
     %Starting point
@@ -23,4 +23,3 @@ end
 %Assign any unassigned values randomly (this does mean that some validation sets will be longer than others)
 valList(valList==0) = randi(n,length(valList(valList==0)),1);
 end
-
