@@ -39,6 +39,7 @@ podList.timezone = NaN(size(podList,1),1);
 
 %Read variable information into cell arrays to be able to store headers of different length
 for i=1:size(podInventory,1)
+    if isnan(podInventory.Timezone(i));continue;end
     %Split the comma separated info and check that there is a type for each variable
     VarNames = split(podInventory.VarNames(i),',')';
     VarTypes = split(podInventory.VarTypes(i),',')';
