@@ -45,6 +45,10 @@ for i = 1:nPodFiles
 end
 
 %Throw an error if no pod data was loaded (the variable temp will not exist)
-assert(exist('temp','var')~=0,'No colocation .mat files found for this pod.  This may be caused by pods in the "field" folder that are not in the "colocation" folder')
+if exist('temp','var')==0
+    warning(['No .mat files found for ' podName '.  This may be caused by pods not in both the "field" and "colocation" folder. Analysis for this pod will be skipped.']);
+    podData = table(0);
+end
+end
 
 
