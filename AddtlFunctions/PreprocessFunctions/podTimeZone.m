@@ -1,36 +1,71 @@
-function [X,t] = podTimeZone(X, t, settingsSet)
-%{
-This function uses the pod inventory file to adjust for differences between
-the timezone in which the pod is recording time and the reference is
-reported in.  Note that this does not account for DST issues
-%}
+function [X,xt] = podTimeZone(X, xt, settingsSet)
+%This function uses the pod inventory file to adjust for differences between
+%the timezone in which the pod is recording time and the reference is
+%reported in.  Note that this does not account for DST issues
 
-%Get the pod inventory
-podInventory = settingsSet.podInventory;
-%Get reference time zone
-refTZ = hours(settingsSet.refTZ{1});
-pName = settingsSet.currentPod;
 
-%Loop through each line in the pod inventory
-for i = 1:size(podInventory,2)
-    %Get the name of the pod from the inventory file
-    try
-        invName = podInventory{1,i}{1,3};
-    catch err
-        warning('Issues reading pod inventory file issues, may indicate malformed lines in the csv file');
-        invName = 'NA';
+%% Get information about current pod file
+j = settingsSet.loops.j;
+
+%Get the pod name
+podName = settingsSet.podList.podName{j};
+podTZ = hours(settingsSet.podList.timezone(j));
+
+%Clear index variables
+clear j
+
+%% Get the deployment log into its own variable for code tidyness
+deployLog = settingsSet.deployLog;
+%List of flags to keep track of which times have been corrected
+corrected = false(size(xt,1),1);
+%Flag for matching entries in deployment log
+matchlog = false;
+%Temporary array to hold corrected times
+temp_t = xt;
+
+%% Check each entry in the deployment log
+%NOTE: If there are overlapping entries in the deployment log, the first entry will be used for the correction
+for i = 1:size(deployLog,1)
+    %Join the pod name and type from the deploy log for convenience
+    deployPod = deployLog.PodName{i};
+    
+    %If the pod name matches, try to use this entry
+    if strcmp(deployPod,podName) 
+        matchlog = true;
     end
     
-    %Check if the pod name for this file matches the entry in the pod inventory file
-    %NOTE: if there are multiple lines in the pod inventory for one pod, this will probably break or mess up your time stamps
-    if strcmpi(pName,invName)
-        %The second column of the pod inventory file has the timezone in which the pod was programmed
-        podTZ = hours(podInventory{1,i}{1,2});
+    %If a match was found in the deployment log
+    if matchlog
+        %Get the timezone from this entry
+        refTZ = hours(deployLog.TimeZoneDeployed(i));
         
-        %Adjust the timezone of the pod to match the reference file
-        t = t + (refTZ - podTZ);
-    end%comparison of pod name and inventory row
-    clear invName
+        %Make temporary shifted timeseries to compare to log
+        t_shift = xt + (refTZ - podTZ);
+        
+        %Get T/F list of time entries within the time period indicated on this line
+        %Window starts 1 hr before deploy log and ends 1 hour after in case of weirdness with daylight savings
+        withinTime = isbetween(t_shift,deployLog.Start(i)-hours(1),deployLog.End(i)+hours(1));
+        
+        withinTime = withinTime & ~corrected;
+        
+        %Assign shifted times into the temporary time array
+        temp_t(withinTime) = t_shift(withinTime);
+        
+        %Keep track of which ones have been corrected in case of overlapping entries
+        corrected(withinTime) = true;
+        
+        %Reset match flag
+        matchlog = false;
+    end
     
-end%loop through pod inventory lines
+    %Can skip looping through rest of deployment log if every point has been corrected
+    if all(corrected)
+        break
+    end
+end
+
+%% Have to throw away times that were not corrected to avoid creating overlapping times
+xt = temp_t(corrected);
+X = X(corrected,:);
+
 end%function

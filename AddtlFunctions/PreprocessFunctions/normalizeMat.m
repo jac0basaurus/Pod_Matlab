@@ -1,4 +1,4 @@
-function [X,t] = normalizeMat(X, t, settingsSet)
+function [X,t] = normalizeMat(X, t, ~)
 %{
 This function normalizes and centers data by subtracting the mean and then
 dividing by the standard deviation

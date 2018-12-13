@@ -1,35 +1,25 @@
 function [X,t] = addRollingVar(X, t, ~)
 %Add a rolling variance measure spanning the past 5 minutes
 
-%Minutes to lag by
-t_lag = minutes(5);
+%Calculate typical deviation between points for window
+a = t(1:end-1);
+b = t(2:end);
+delta = median(b-a);
 
-%Start by finding where to begin (at least 5 minutes in)
-index = 1:length(t);
-shift = min(t)+t_lag;
-index(t>shift)=[];
-index = max(index);
+%Use 5 minute window
+k = floor(minutes(5)/delta);
 
-%Make empty array to input values
-varArray = zeros(length(t),size(X,2));
+%Get array to hold values
+varArray = table2array(X);
 
-%Loop beginning at that point
-for i=(index+1):length(t)
-    %Get two shifted timeseries
-    t_current = t(i);
-    t_earlier = t_current - t_lag;
-    X_roll = table2array(X((t<t_current & t>t_earlier),:));
-    for j = 1:size(X,2)
-        try
-            varArray(i,j) = var(X_roll(:,j));
-        catch
-        end
-    end
+%Use moving variance function for each variable
+for i = 1:size(varArray,2)
+    varArray(:,i) = movvar(varArray(:,i),k,'omitnan');
 end
 
-%Assign nice variable names
+%Assign nice variable names (e.g.: humidity -> humidity_var)
 varArray = array2table(varArray);
-for i = 1:size(X,2)
+for i = 1:size(varArray,2)
     varArray.Properties.VariableNames{i} = [X.Properties.VariableNames{i} '_var'];
 end
 
